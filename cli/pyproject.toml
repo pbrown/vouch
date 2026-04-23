@@ -1,0 +1,21 @@
+[project]
+name = "vouch-cli"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Pooja Garg", email = "pooja.brown@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "click>=8.3.3",
+    "httpx>=0.28.1",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+vouch-cli = "vouch_cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"

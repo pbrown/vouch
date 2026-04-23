@@ -1,0 +1,13 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: vouch
+      POSTGRES_PASSWORD: vouch_dev
+      POSTGRES_DB: vouch
+    ports:
+      - "5432:5432"
+    volumes:
+      - vouch_pgdata:/var/lib/postgresql/data
+volumes:
+  vouch_pgdata:
