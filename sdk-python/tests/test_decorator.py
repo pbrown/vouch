@@ -126,3 +126,48 @@ def test_runtime_url_env_var(
 
     t()
     assert sent[0]["url"] == "https://vouch.example.com/v1/captures"
+
+
+def test_pydantic_output_serialized_to_dict(sent: list[dict[str, Any]]) -> None:
+    """Pydantic returns must land as structured JSON, not a repr() string.
+
+    Reviewers and the graduation engine query individual fields from
+    output_json; a repr blob makes that impossible.
+    """
+    from datetime import date
+
+    from pydantic import BaseModel
+
+    class Reply(BaseModel):
+        subject: str
+        sent_at: date
+        flags: list[str] = []
+
+    @vouch.task("draft_reply")
+    def draft_reply() -> Reply:
+        return Reply(subject="hi", sent_at=date(2026, 4, 25), flags=["x"])
+
+    draft_reply()
+    output_json = sent[0]["body"]["output_json"]
+    assert output_json == {
+        "subject": "hi",
+        "sent_at": "2026-04-25",
+        "flags": ["x"],
+    }
+
+
+def test_pydantic_input_serialized_to_dict(sent: list[dict[str, Any]]) -> None:
+    """Pydantic args/kwargs must also land as structured JSON, not repr blobs."""
+    from pydantic import BaseModel
+
+    class PO(BaseModel):
+        id: str
+        total: float
+
+    @vouch.task("ack")
+    def ack(po: PO) -> str:
+        return "ok"
+
+    ack(PO(id="PO-1", total=42.5))
+    args = sent[0]["body"]["input_json"]["args"]
+    assert args == [{"id": "PO-1", "total": 42.5}]

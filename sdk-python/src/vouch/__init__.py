@@ -41,9 +41,14 @@ def _to_jsonable(value: Any) -> Any:
     non-serializable objects. We preserve JSON-native types verbatim and fall
     back to repr() for anything else so a capture is always recordable —
     lossy-but-present beats failing the caller.
+
+    Pydantic BaseModel instances are dumped with `mode="json"` so reviewers
+    and downstream consumers get structured fields, not a single repr string.
     """
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
     if isinstance(value, (list, tuple, set, frozenset)):
         return [_to_jsonable(v) for v in value]
     if isinstance(value, dict):
