@@ -128,16 +128,11 @@ def test_reconcile_invoice_returns_pydantic_model(fake_anthropic: MagicMock) -> 
 
 
 def test_propose_reorder_returns_pydantic_model(fake_anthropic: MagicMock) -> None:
+    """LLM only emits prose; numeric fields are computed in Python."""
     fake_anthropic.messages.create.return_value = _tool_use_response(
         {
-            "sku_id": "ALU-6061-T6-1IN",
-            "proposed_quantity": 250,
-            "proposed_supplier_id": "sup-000001",
-            "estimated_unit_cost": 21.25,
-            "estimated_total_cost": 5312.5,
-            "rationale": "30 days buffer above lead time at current burn.",
-            "requires_capex_approval": False,
-            "proposal_message": "Proposing 250 units from Cascade Steel Mills.",
+            "rationale": "30 days buffer above 30-day lead time at 150/month burn.",
+            "proposal_message": "Proposing 300 units from Cascade Steel Mills.",
         }
     )
     out = astra.propose_reorder(
@@ -159,8 +154,39 @@ def test_propose_reorder_returns_pydantic_model(fake_anthropic: MagicMock) -> No
         },
     )
     assert isinstance(out, astra.ReorderProposal)
-    assert out.proposed_quantity == 250
+    # 150 * (30/30 + 1) = 300, no safety stock (reliability >= 0.85),
+    # ceil(300/10)*10 = 300.
+    assert out.proposed_quantity == 300
+    assert out.estimated_total_cost == 300 * 21.25
     assert out.requires_capex_approval is False
+    assert out.proposed_supplier_id == "sup-000001"
+    assert out.rationale.startswith("30 days buffer")
+
+
+def test_calc_reorder_quantity_applies_safety_stock_when_unreliable() -> None:
+    """Direct-test the formula so future tweaks are caught."""
+    # Reliable supplier: no safety stock.
+    assert (
+        astra._calc_reorder_quantity(
+            monthly_burn=100, lead_time_days=30, reliability=0.95
+        )
+        == 200
+    )
+    # Unreliable supplier: +15% safety stock, then round up to nearest 10.
+    # base = 100 * 2 * 1.15 = 230 -> ceil(230/10)*10 = 230.
+    assert (
+        astra._calc_reorder_quantity(
+            monthly_burn=100, lead_time_days=30, reliability=0.80
+        )
+        == 230
+    )
+    # Long lead time: 800 * (45/30 + 1) = 2000, no safety stock at 0.88.
+    assert (
+        astra._calc_reorder_quantity(
+            monthly_burn=800, lead_time_days=45, reliability=0.88
+        )
+        == 2000
+    )
 
 
 def test_engage_new_supplier_returns_pydantic_model(fake_anthropic: MagicMock) -> None:

@@ -16,6 +16,7 @@ Run the smoke test (with API keys in `.env` or the environment):
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import date
 from pathlib import Path
@@ -236,11 +237,13 @@ PO (canonical):    {po}
 Goods receipt:     {receipt}
 Supplier invoice:  {invoice}
 
-Variance thresholds (use the LARGER of the absolute or percentage allowance —
-i.e. a variance is in tolerance if it satisfies either):
-- quantities: within 1 unit OR 1% per line.
-- unit prices: within $0.50 OR 0.5%.
-- totals: within $5 OR 0.5%.
+Variance thresholds (percentage-only — compute as
+abs(invoice - po) / po * 100):
+- quantity per line: in tolerance if variance <= 1.0%.
+- unit price per line: in tolerance if variance <= 0.5%.
+- total: in tolerance if variance <= 0.5%.
+
+A variance that exceeds its threshold is "out of tolerance" -> discrepancy.
 
 match_status:
 - "clean": every line item appears in all three docs and every quantity, unit
@@ -307,36 +310,55 @@ class ReorderProposal(BaseModel):
     proposal_message: str
 
 
-REORDER_PROPOSAL_PROMPT = """\
-You are Astra. A SKU has hit its reorder threshold and you need to propose a
-purchase quantity and supplier.
+class _ReorderRationale(BaseModel):
+    """LLM-only output for `propose_reorder` — prose fields only.
 
-SKU: {sku_id} ({sku_description}), unit cost ~${unit_cost}, monthly burn ~{monthly_burn} units,
-reorder threshold {reorder_threshold}, current stock {current_stock}.
+    Numerical fields (quantity, total cost, capex flag) are computed
+    deterministically in Python and merged in after the call. The LLM is
+    notoriously bad at arithmetic; doing the math here removes a whole class
+    of hallucination where the rationale text and the numbers disagree.
+    """
+
+    rationale: str
+    proposal_message: str
+
+
+def _calc_reorder_quantity(
+    monthly_burn: int, lead_time_days: int, reliability: float
+) -> int:
+    """Acme's reorder formula. Lead-time coverage + 30-day buffer; +15% safety
+    stock if reliability < 0.85; round up to nearest 10."""
+    base = monthly_burn * (lead_time_days / 30 + 1)
+    if reliability < 0.85:
+        base *= 1.15
+    return math.ceil(base / 10) * 10
+
+
+REORDER_RATIONALE_PROMPT = """\
+You are Astra, the procurement agent for Acme Industrial. We have already
+computed the reorder quantity using Acme's standard formula. Your job is to
+write a concise rationale and a buyer-facing proposal message.
+
+SKU: {sku_id} ({sku_description}), unit cost ${unit_cost}, monthly burn
+{monthly_burn} units, current stock {current_stock}, reorder threshold
+{reorder_threshold}.
 Preferred supplier: {supplier_name} (id {supplier_id}, tier {supplier_tier},
-reliability {reliability}, typical lead time {lead_time_days} days,
-communication style: {comm_style}).
+reliability {reliability}, typical lead time {lead_time_days} days).
 
-Use the preferred supplier; set proposed_supplier_id={supplier_id}. Do not
-substitute a different supplier in v1.
+PRE-CALCULATED FACTS (use these exactly; do not recompute):
+- proposed_quantity = {proposed_quantity} units.
+  This covers the {lead_time_days}-day lead time plus ~30 days of buffer
+  stock; safety stock {safety_stock_clause}.
+- estimated_total_cost = ${estimated_total_cost}.
+- requires_capex_approval = {capex_flag}
+  (true iff estimated_total_cost exceeds Acme's $10,000 capex threshold).
 
-Quantity calculation (apply in order):
-  base = monthly_burn * (lead_time_days / 30 + 1)
-    -> covers lead time plus ~30 days of buffer.
-  if reliability < 0.85: base = base * 1.15  (safety stock).
-  proposed_quantity = ceil(base / 10) * 10   (round up to nearest 10).
-
-Cost calculation:
-  estimated_unit_cost = unit_cost.
-  estimated_total_cost = proposed_quantity * unit_cost.
-  requires_capex_approval = (estimated_total_cost > 10000).
-
-Field semantics:
-- rationale: ONE sentence justifying the proposed_quantity (cite lead time,
-  burn, and safety-stock decision).
-- proposal_message: 3-4 sentence message addressed to the BUYER (not the
-  supplier) that summarises sku, proposed_quantity, supplier choice, and
-  whether capex approval is needed.
+Field rules:
+- rationale: ONE sentence justifying proposed_quantity. Cite lead time, burn
+  rate, and the safety-stock decision.
+- proposal_message: 3-4 sentences addressed to the reviewing BUYER (not the
+  supplier). Summarise SKU, proposed_quantity, supplier choice, and whether
+  capex approval is required.
 """
 
 
@@ -346,24 +368,54 @@ def propose_reorder(
     current_stock: int,
     supplier: dict[str, Any],
 ) -> ReorderProposal:
-    prompt = REORDER_PROPOSAL_PROMPT.format(
+    monthly_burn = int(sku.get("monthly_burn", 0))
+    lead_time_days = int(supplier.get("typical_lead_time_days", 0))
+    reliability = float(supplier.get("reliability", 1.0))
+    unit_cost = float(sku.get("unit_cost", 0.0))
+
+    proposed_quantity = _calc_reorder_quantity(
+        monthly_burn, lead_time_days, reliability
+    )
+    estimated_total_cost = round(proposed_quantity * unit_cost, 2)
+    requires_capex_approval = estimated_total_cost > 10_000
+    safety_stock_clause = (
+        "applied (+15%) because reliability is below 0.85"
+        if reliability < 0.85
+        else "not applied (reliability >= 0.85)"
+    )
+
+    prompt = REORDER_RATIONALE_PROMPT.format(
         sku_id=sku.get("id", "SKU-UNKNOWN"),
         sku_description=sku.get("description", "unknown"),
-        unit_cost=sku.get("unit_cost", 0.0),
-        monthly_burn=sku.get("monthly_burn", 0),
+        unit_cost=unit_cost,
+        monthly_burn=monthly_burn,
         reorder_threshold=sku.get("reorder_threshold", 0),
         current_stock=current_stock,
         supplier_name=supplier.get("name", "Unknown"),
         supplier_id=supplier.get("id", "sup-unknown"),
         supplier_tier=supplier.get("tier", "transactional"),
-        reliability=supplier.get("reliability", 0.0),
-        lead_time_days=supplier.get("typical_lead_time_days", 0),
-        comm_style=supplier.get("communication_style", "professional"),
+        reliability=reliability,
+        lead_time_days=lead_time_days,
+        proposed_quantity=proposed_quantity,
+        safety_stock_clause=safety_stock_clause,
+        estimated_total_cost=f"{estimated_total_cost:.2f}",
+        capex_flag=str(requires_capex_approval).lower(),
     )
-    return _call_structured(
+    rationale = _call_structured(
         prompt,
-        ReorderProposal,
-        "Emit a reorder proposal for buyer review.",
+        _ReorderRationale,
+        "Emit only the rationale and proposal_message text.",
+    )
+
+    return ReorderProposal(
+        sku_id=str(sku.get("id", "SKU-UNKNOWN")),
+        proposed_quantity=proposed_quantity,
+        proposed_supplier_id=str(supplier.get("id", "sup-unknown")),
+        estimated_unit_cost=unit_cost,
+        estimated_total_cost=estimated_total_cost,
+        rationale=rationale.rationale,
+        requires_capex_approval=requires_capex_approval,
+        proposal_message=rationale.proposal_message,
     )
 
 
