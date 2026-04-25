@@ -1,0 +1,73 @@
+[
+  {
+    "id": "rev-priya",
+    "name": "Priya Iyer",
+    "role": "Senior Buyer",
+    "handles": [
+      "high_value_po",
+      "strategic_supplier_followup",
+      "capex_reorder",
+      "new_supplier_engagement"
+    ],
+    "edit_style": {
+      "tone_preference": "warm but firm",
+      "length_preference": "concise",
+      "common_additions": [
+        "explicit delivery commitment ask",
+        "relationship context",
+        "named point of contact"
+      ],
+      "common_removals": [
+        "apology language for supplier delays",
+        "hedging phrases ('we were hoping', 'if possible')"
+      ]
+    },
+    "edit_rate_baseline": 0.18,
+    "severity_baseline": 0.6
+  },
+  {
+    "id": "rev-marcus",
+    "name": "Marcus Chen",
+    "role": "Junior Buyer",
+    "handles": [
+      "routine_po_ack",
+      "low_value_reorder"
+    ],
+    "edit_style": {
+      "tone_preference": "neutral, friendly",
+      "length_preference": "as drafted",
+      "common_additions": [
+        "personal sign-off",
+        "acme procurement signature block"
+      ],
+      "common_removals": [
+        "overly formal salutations"
+      ]
+    },
+    "edit_rate_baseline": 0.04,
+    "severity_baseline": 0.2
+  },
+  {
+    "id": "rev-diana",
+    "name": "Diana Okafor",
+    "role": "Accounts Payable Lead",
+    "handles": [
+      "invoice_three_way_match"
+    ],
+    "edit_style": {
+      "tone_preference": "precise, policy-grounded",
+      "length_preference": "thorough on discrepancies, terse on clean matches",
+      "common_additions": [
+        "GL category corrections",
+        "policy citation (e.g., AP-104 line-item rule)",
+        "exact variance amount and percentage"
+      ],
+      "common_removals": [
+        "ambiguous category labels",
+        "vague approval phrasing on flagged invoices"
+      ]
+    },
+    "edit_rate_baseline": 0.22,
+    "severity_baseline": 0.7
+  }
+]
