@@ -40,3 +40,34 @@ Inventry's Jonah is the first production deployment. Sibling checkout at `~/code
 - Do not commit secrets. `.env` files are gitignored.
 - Do not push breaking changes to `sdk-python/` without a migration note.
 - Do not use raw SQL where SQLAlchemy would work.
+
+
+## Three prompt categories — keep them distinct
+
+This codebase has three categories of LLM prompts. They serve different purposes and have different quality criteria. Do not conflate them when iterating, testing, or discussing changes.
+
+### 1. Agent prompts — `examples/<scenario>/<agent>.py`
+
+The prompts the *simulated agent* uses to draft work. In the Acme Industrial scenario this is Astra; her five prompts (`PO_ACK_PROMPT`, `SUPPLIER_FOLLOWUP_PROMPT`, `INVOICE_MATCH_PROMPT`, `REORDER_PROPOSAL_PROMPT`, `NEW_SUPPLIER_ENGAGEMENT_PROMPT`) live as Python constants in `examples/acme-industrial/astra.py`.
+
+**Good = consistent, realistic drafts.** Inconsistency on identical input is a bug. Tighten with explicit rules until five-out-of-five runs produce equivalent outputs.
+
+### 2. Simulated reviewer prompts — `examples/<scenario>/reviewers.py`
+
+The prompts simulated humans (e.g., Priya, Marcus, Diana for Acme) use when making LLM-driven edits to agent drafts. Per `docs/planning/SIMULATION_SPEC.md`, roughly 30% of simulated reviewer edits are LLM-driven; the other 70% are rule-based.
+
+**Good = plausible, varied edits within the persona.** Inconsistency is feature, not bug — real humans are inconsistent. Variance should track the persona's described edit style.
+
+### 3. Vouch internal prompts — `runtime/src/vouch_runtime/...`
+
+The prompts Vouch's own runtime uses for analysis. Coming in Week 5: a clustering verification prompt (LLM-as-judge for "are these corrections the same edit?") and a graduation proposal generation prompt.
+
+**Good = correct, conservative analysis.** Strictest quality bar. Graduation decisions depend on these being right.
+
+### Relationship
+[Agent]  --draft-->  [Reviewer]  --edit-->  [Vouch captures both, then analyzes]
+↑                     ↑                          ↑
+|                     |                          |
+Category 1           Category 2                Category 3
+
+When iterating prompts, always state which category. "Tightened the prompt" is ambiguous; "tightened Astra's invoice match prompt" is clear.
