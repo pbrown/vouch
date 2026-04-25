@@ -4,8 +4,9 @@ Calls OpenAI gpt-4o-mini once per category (12 categories, ~40 suppliers each)
 with structured outputs, validates each supplier through a Pydantic model,
 assigns sequential ids, and writes the result to suppliers.json.
 
-Reads OPENAI_API_KEY from the environment. Run with:
-    uv run --with openai --with pydantic python generate_suppliers.py
+Reads OPENAI_API_KEY from `.env` in the `acme-industrial` directory (or the
+environment). Run from repo root or this example:
+    cd examples/acme-industrial && uv run python seed/generate_suppliers.py
 """
 
 from __future__ import annotations
@@ -16,8 +17,12 @@ import sys
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
+
+_EXAMPLE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(_EXAMPLE_DIR / ".env")
 
 Tier = Literal["strategic", "preferred", "transactional"]
 Currency = Literal["USD", "EUR", "GBP", "CAD", "MXN", "JPY", "CNY"]
@@ -148,7 +153,7 @@ def main() -> int:
         return 1
 
     client = OpenAI()
-    out_path = Path(__file__).parent / "suppliers.json"
+    out_path = _EXAMPLE_DIR / "seed" / "suppliers.json"
 
     all_suppliers: list[Supplier] = []
     for idx, category in enumerate(CATEGORIES):
