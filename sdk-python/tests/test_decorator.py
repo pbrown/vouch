@@ -12,6 +12,12 @@ import pytest
 import vouch
 
 
+@pytest.fixture(autouse=True)
+def _reset_last_capture_id() -> None:
+    """ContextVar persists across tests in the same thread; reset for isolation."""
+    vouch._last_capture_id.set(None)
+
+
 @pytest.fixture
 def sent(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     captured: list[dict[str, Any]] = []
@@ -171,3 +177,54 @@ def test_pydantic_input_serialized_to_dict(sent: list[dict[str, Any]]) -> None:
     ack(PO(id="PO-1", total=42.5))
     args = sent[0]["body"]["input_json"]["args"]
     assert args == [{"id": "PO-1", "total": 42.5}]
+
+
+def test_get_last_capture_id_after_success(sent: list[dict[str, Any]]) -> None:
+    @vouch.task("t")
+    def t() -> int:
+        return 1
+
+    assert vouch.get_last_capture_id() is None  # nothing run yet in this test
+    t()
+    assert vouch.get_last_capture_id() == sent[0]["body"]["id"]
+
+
+def test_get_last_capture_id_after_error(sent: list[dict[str, Any]]) -> None:
+    @vouch.task("boom")
+    def boom() -> None:
+        raise RuntimeError("x")
+
+    with pytest.raises(RuntimeError):
+        boom()
+    # Even on error, the id is set so callers can attach a correction if useful.
+    assert vouch.get_last_capture_id() == sent[0]["body"]["id"]
+
+
+def test_get_last_capture_id_isolated_across_threads(
+    sent: list[dict[str, Any]],
+) -> None:
+    """Threads start with fresh contexts; one thread's id does not bleed to another."""
+    import threading
+
+    @vouch.task("t")
+    def t() -> int:
+        return 1
+
+    ids: dict[str, str | None] = {}
+    barrier = threading.Barrier(2)
+
+    def worker(label: str) -> None:
+        barrier.wait()
+        t()
+        ids[label] = vouch.get_last_capture_id()
+
+    threads = [threading.Thread(target=worker, args=(name,)) for name in ("a", "b")]
+    for thr in threads:
+        thr.start()
+    for thr in threads:
+        thr.join()
+
+    assert ids["a"] is not None and ids["b"] is not None
+    assert ids["a"] != ids["b"]  # each thread saw its own capture
+    # And the parent thread's slot was never written from inside the children.
+    assert vouch.get_last_capture_id() is None

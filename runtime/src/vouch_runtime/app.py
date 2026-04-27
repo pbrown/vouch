@@ -32,15 +32,31 @@ class CapturePayload(BaseModel):
     completed_at: float
 
 
-# Module-level store; tests reach in to clear between cases.
+class CorrectionPayload(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    capture_id: str
+    original_output_json: dict[str, Any]
+    edited_output_json: dict[str, Any]
+    edit_severity: float = Field(ge=0.0, le=1.0)
+    reviewer_id: str
+    edit_tags: list[str] = Field(default_factory=list)
+    submitted_at: float
+
+
+# Module-level stores; tests reach in to clear between cases.
 _captures: list[CapturePayload] = []
+_corrections: list[CorrectionPayload] = []
 
 app = FastAPI(title="Vouch Runtime", version="0.1.0")
 
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "captures": len(_captures)}
+    return {
+        "status": "ok",
+        "captures": len(_captures),
+        "corrections": len(_corrections),
+    }
 
 
 @app.post("/v1/captures")
@@ -61,4 +77,26 @@ def list_captures() -> dict[str, Any]:
     return {
         "captures": [c.model_dump(mode="json") for c in _captures],
         "count": len(_captures),
+    }
+
+
+@app.post("/v1/corrections")
+def post_correction(payload: CorrectionPayload) -> dict[str, Any]:
+    _corrections.append(payload)
+    logger.info(
+        "correction id=%s capture_id=%s reviewer=%s severity=%.2f tags=%s",
+        payload.id,
+        payload.capture_id,
+        payload.reviewer_id,
+        payload.edit_severity,
+        payload.edit_tags,
+    )
+    return {"id": payload.id, "stored": True}
+
+
+@app.get("/v1/corrections")
+def list_corrections() -> dict[str, Any]:
+    return {
+        "corrections": [c.model_dump(mode="json") for c in _corrections],
+        "count": len(_corrections),
     }
