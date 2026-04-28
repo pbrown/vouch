@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        package: [sdk-python, runtime, cli]
+        package: [sdk-python, cli]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -16,6 +16,31 @@ jobs:
           cd ${{ matrix.package }}
           uv sync
           uv run ruff check .
+          uv run pytest
+  runtime:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: vouch
+          POSTGRES_PASSWORD: vouch_dev
+          POSTGRES_DB: vouch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: |
+          cd runtime
+          uv sync
+          uv run ruff check .
+          uv run alembic upgrade head
           uv run pytest
   ui:
     runs-on: ubuntu-latest
