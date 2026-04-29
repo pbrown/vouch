@@ -214,22 +214,35 @@ def _handle_one(
     counts: Counter[str],
     reviewer_counts: Counter[str],
     correction_counts: Counter[str],
+    tier_counts: Counter[str],
 ) -> None:
     import vouch
     from reviewers import decide_edit, report_correction, route_reviewer
 
     counts[task_name] += 1
+
+    # Read the configured tier so we can branch reviewer routing on auto.
+    tier = vouch.get_tier(task_name) or "ai_draft"
+    tier_counts[tier] += 1
+
     try:
         result = astra_call()
+    except vouch.HumanOnlyTaskError:
+        # human_only tier: SDK has already posted a pending_human capture and
+        # the function did NOT execute. Reviewer routing happens in production
+        # via a queue read; in simulation we just count the event.
+        return
     except Exception as exc:
-        # An Astra failure still produced a capture (the SDK records errors).
-        # We don't route a reviewer for failed drafts.
         print(f"  [error] {task_name}: {exc}", file=sys.stderr)
         return
 
     capture_id = vouch.get_last_capture_id()
     if capture_id is None:
         return  # SDK failed to set; skip correction step
+
+    # auto tier: reviewer only sees the draft when QA-sampling flags it.
+    if tier == "auto" and not vouch.get_last_sample_qa_flagged():
+        return
 
     output_dict = (
         result.model_dump(mode="json")
@@ -388,16 +401,27 @@ def main() -> int:
     if args.mock:
         _install_mock_call_structured()
 
+    import vouch
+
+    workflow_path = _EXAMPLE_DIR / "workflow.yaml"
+    workflow = vouch.configure_workflow(workflow_path)
+    print(
+        f"Loaded workflow {workflow.workflow} v{workflow.version} "
+        f"({len(workflow.tasks)} tasks)"
+    )
+
     suppliers = json.loads((_EXAMPLE_DIR / "seed" / "suppliers.json").read_text())
 
     counts: Counter[str] = Counter()
     reviewer_counts: Counter[str] = Counter()
     correction_counts: Counter[str] = Counter()
+    tier_counts: Counter[str] = Counter()
     handler_kw = dict(
         runtime_url=args.runtime_url,
         counts=counts,
         reviewer_counts=reviewer_counts,
         correction_counts=correction_counts,
+        tier_counts=tier_counts,
     )
 
     start = datetime(2026, 4, 1, 0, 0, 0)
@@ -432,6 +456,10 @@ def main() -> int:
         edits = correction_counts.get(rev, 0)
         rate = edits / n if n else 0.0
         print(f"  {rev:12s} routed={n:6d}  edits={edits:5d}  rate={rate:.2%}")
+    print()
+    print("Per-tier event counts:")
+    for tier, n in sorted(tier_counts.items()):
+        print(f"  {tier:12s} {n:6d}")
     return 0
 
 

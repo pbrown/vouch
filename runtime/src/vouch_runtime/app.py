@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from vouch_runtime.db import get_db
-from vouch_runtime.models import Capture, Correction
+from vouch_runtime.models import Capture, Correction, WorkflowVersion
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,10 +31,21 @@ class CapturePayload(BaseModel):
     task_name: str
     input_json: dict[str, Any]
     output_json: dict[str, Any] | None = None
-    status: Literal["success", "error"]
+    status: Literal["success", "error", "pending_human"]
     error_message: str | None = None
     started_at: float
     completed_at: float
+    workflow_name: str | None = None
+    workflow_version: int | None = None
+    sample_qa_flagged: bool | None = None
+
+
+class WorkflowRegistrationPayload(BaseModel):
+    workflow_name: str
+    version: int = Field(ge=1)
+    yaml_content: str
+    definition_json: dict[str, Any]
+    registered_by: str | None = None
 
 
 class CorrectionPayload(BaseModel):
@@ -79,6 +90,21 @@ def _capture_to_dict(c: Capture) -> dict[str, Any]:
         "error_message": c.error_message,
         "started_at": _to_epoch(c.started_at),
         "completed_at": _to_epoch(c.completed_at),
+        "workflow_name": c.workflow_name,
+        "workflow_version": c.workflow_version,
+        "sample_qa_flagged": c.sample_qa_flagged,
+    }
+
+
+def _workflow_version_to_dict(w: WorkflowVersion) -> dict[str, Any]:
+    return {
+        "id": str(w.id),
+        "workflow_name": w.workflow_name,
+        "version": w.version,
+        "yaml_content": w.yaml_content,
+        "definition_json": w.definition_json,
+        "registered_at": _to_epoch(w.registered_at),
+        "registered_by": w.registered_by,
     }
 
 
@@ -120,6 +146,9 @@ def post_capture(
         error_message=payload.error_message,
         started_at=_from_epoch(payload.started_at),
         completed_at=_from_epoch(payload.completed_at),
+        workflow_name=payload.workflow_name,
+        workflow_version=payload.workflow_version,
+        sample_qa_flagged=payload.sample_qa_flagged,
     )
     db.add(capture)
     db.commit()
@@ -183,4 +212,84 @@ def list_corrections(db: Session = Depends(get_db)) -> dict[str, Any]:
     return {
         "corrections": [_correction_to_dict(c) for c in rows],
         "count": len(rows),
+    }
+
+
+@app.post("/v1/workflows")
+def register_workflow(
+    payload: WorkflowRegistrationPayload, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    """Idempotent: returns the existing row if (workflow_name, version) is taken.
+
+    The (workflow_name, version) pair is the natural key. Re-posting the same
+    pair returns ``created: false`` and the existing row's id, even if the
+    yaml_content or definition_json differs (we treat the first registration
+    as authoritative).
+    """
+    existing = db.scalar(
+        select(WorkflowVersion).where(
+            WorkflowVersion.workflow_name == payload.workflow_name,
+            WorkflowVersion.version == payload.version,
+        )
+    )
+    if existing is not None:
+        return {
+            "id": str(existing.id),
+            "created": False,
+            "workflow": _workflow_version_to_dict(existing),
+        }
+
+    row = WorkflowVersion(
+        workflow_name=payload.workflow_name,
+        version=payload.version,
+        yaml_content=payload.yaml_content,
+        definition_json=payload.definition_json,
+        registered_by=payload.registered_by,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    logger.info(
+        "workflow registered name=%s version=%d id=%s",
+        row.workflow_name,
+        row.version,
+        row.id,
+    )
+    return {
+        "id": str(row.id),
+        "created": True,
+        "workflow": _workflow_version_to_dict(row),
+    }
+
+
+@app.get("/v1/workflows/{workflow_name}/current")
+def get_current_workflow(
+    workflow_name: str, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    row = db.scalar(
+        select(WorkflowVersion)
+        .where(WorkflowVersion.workflow_name == workflow_name)
+        .order_by(WorkflowVersion.version.desc())
+        .limit(1)
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail=f"workflow {workflow_name!r} not registered"
+        )
+    return _workflow_version_to_dict(row)
+
+
+@app.get("/v1/workflows/{workflow_name}/history")
+def get_workflow_history(
+    workflow_name: str, db: Session = Depends(get_db)
+) -> dict[str, Any]:
+    rows = db.scalars(
+        select(WorkflowVersion)
+        .where(WorkflowVersion.workflow_name == workflow_name)
+        .order_by(WorkflowVersion.version.desc())
+    ).all()
+    return {
+        "workflow_name": workflow_name,
+        "count": len(rows),
+        "versions": [_workflow_version_to_dict(w) for w in rows],
     }

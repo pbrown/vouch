@@ -1,0 +1,19 @@
+workflow: astra
+version: 1
+tasks:
+  - name: po_acknowledgement
+    tier: ai_draft
+    mechanism: email
+  - name: supplier_followup
+    tier: ai_draft
+    mechanism: email
+  - name: invoice_three_way_match
+    tier: auto
+    mechanism: api
+    sample_qa_rate: 0.10
+  - name: low_stock_reorder
+    tier: human_only
+    mechanism: api
+  - name: new_supplier_engagement
+    tier: human_only
+    mechanism: email

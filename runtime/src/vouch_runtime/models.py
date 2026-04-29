@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, String, Text, func
+from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -45,6 +45,9 @@ class Capture(Base):
         default=_utcnow,
         server_default=func.now(),
     )
+    workflow_name: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    workflow_version: Mapped[int | None] = mapped_column(nullable=True)
+    sample_qa_flagged: Mapped[bool | None] = mapped_column(nullable=True)
 
     corrections: Mapped[list[Correction]] = relationship(
         back_populates="capture",
@@ -85,3 +88,27 @@ class Correction(Base):
 
 
 Index("ix_captures_started_at", Capture.started_at.desc())
+
+
+class WorkflowVersion(Base):
+    __tablename__ = "workflow_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "workflow_name", "version", name="uq_workflow_versions_name_version"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    workflow_name: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    version: Mapped[int] = mapped_column(nullable=False)
+    yaml_content: Mapped[str] = mapped_column(Text, nullable=False)
+    definition_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        default=_utcnow,
+        server_default=func.now(),
+    )
+    registered_by: Mapped[str | None] = mapped_column(String, nullable=True)

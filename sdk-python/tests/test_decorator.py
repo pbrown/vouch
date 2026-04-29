@@ -13,9 +13,16 @@ import vouch
 
 
 @pytest.fixture(autouse=True)
-def _reset_last_capture_id() -> None:
-    """ContextVar persists across tests in the same thread; reset for isolation."""
+def _reset_module_state() -> None:
+    """Reset SDK module-level state for test isolation.
+
+    ContextVars persist across tests in the same thread, and the loaded
+    workflow is module-global. Tier-routing tests load a workflow; we must
+    not leak it into the legacy decorator tests in this file.
+    """
     vouch._last_capture_id.set(None)
+    vouch._last_sample_qa_flagged.set(None)
+    vouch._workflow = None
 
 
 @pytest.fixture
